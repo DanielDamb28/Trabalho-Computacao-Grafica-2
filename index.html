@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <title>Logística AR - Cubagem e Picking</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        #overlay {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80%;
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            border-radius: 10px;
+            text-align: center;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        .status-valid {
+            color: #00ff00;
+        }
+
+        .status-invalid {
+            color: #ff3333;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="overlay">
+        <div id="status">Aponte para o palete/chão</div>
+        <div id="info-carga">Volume: - | Regra: -</div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script>
+        (function () {
+            const originalLog = console.log.bind(console);
+            console.log = function () {
+                try {
+                    const args = Array.from(arguments).map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a)));
+                    const payload = JSON.stringify({ time: new Date().toISOString(), args });
+                    if (navigator.sendBeacon) {
+                        const blob = new Blob([payload], { type: 'application/json' });
+                        navigator.sendBeacon('/log', blob);
+                    } else {
+                        fetch('/log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload }).catch(() => { });
+                    }
+                } catch (e) { }
+                originalLog.apply(console, arguments);
+            };
+        })();
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { ARButton } from 'three/addons/webxr/ARButton.js';
+
+        let camera, scene, renderer, reticle;
+        let hitTestSource = null;
+        let hitTestSourceRequested = false;
+
+        const boxes = [];
+        // Constantes de Volume conforme sua regra
+        const VOL_X = 0.010;
+        const VOL_Y = 0.008;
+
+        init();
+
+        function init() {
+            const container = document.createElement('div');
+            document.body.appendChild(container);
+
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+
+            const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 3);
+            scene.add(light);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.xr.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            document.body.appendChild(ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: document.body }
+            }));
+
+            // --- Lógica de Cubagem e Picking ---
+            function onSelect() {
+                if (!reticle.visible) return;
+
+                // 1. Geração de Dados Aleatórios
+                const w = Math.random() * 0.20 + 0.1;
+                const h = Math.random() * 0.20 + 0.1;
+                const d = Math.random() * 0.20 + 0.1;
+                const volume = w * h * d;
+                console.log("Volume Gerado:", volume.toFixed(6), "m³");
+
+                let color, type;
+                if (volume > VOL_X) { color = 0xff0000; type = 'RED'; }
+                else if (volume < VOL_Y) { color = 0x0000ff; type = 'BLUE'; }
+                else { color = 0x00ff00; type = 'GREEN'; }
+
+                const position = new THREE.Vector3();
+                reticle.matrix.decompose(position, new THREE.Quaternion(), new THREE.Vector3());
+
+                // 2. Localizar a caixa MAIS ALTA na posição do clique
+                let highestBox = null;
+                let maxUpperY = position.y; // Começa no nível do chão
+
+                for (let box of boxes) {
+                    // Verifica se o clique foi "dentro" da área da base de uma caixa existente
+                    // Usamos uma margem de tolerância (0.1m) para facilitar o toque no AR
+                    const distXZ = new THREE.Vector2(position.x - box.position.x, position.z - box.position.z).length();
+
+                    if (distXZ < 0.12) {
+                        // Calcula onde termina o topo desta caixa
+                        const topOfBox = box.position.y + (box.userData.h / 2);
+                        if (topOfBox > maxUpperY) {
+                            maxUpperY = topOfBox;
+                            highestBox = box;
+                        }
+                    }
+                }
+
+                // 3. Validação de Regras e Posicionamento
+                let canPlace = true;
+                let finalY = position.y + (h / 2);
+
+                if (highestBox) {
+                    canPlace = checkStackRule(type, highestBox.userData.type);
+                    if (canPlace) {
+                        finalY = maxUpperY + (h / 2); // Coloca acima do topo mais alto encontrado
+                    }
+                }
+
+                if (canPlace) {
+                    const geometry = new THREE.BoxGeometry(w, h, d);
+                    const material = new THREE.MeshPhongMaterial({
+                        color: color,
+                        opacity: 0.9,
+                        transparent: true,
+                        shininess: 100
+                    });
+                    const mesh = new THREE.Mesh(geometry, material);
+
+                    mesh.position.set(position.x, finalY, position.z);
+                    mesh.userData = { type, h, volume }; // Guarda a altura (h) para o próximo cálculo
+
+                    scene.add(mesh);
+                    boxes.push(mesh);
+                    updateUI("Carga Empilhada", type, "Valid");
+                } else {
+                    updateUI(`INVÁLIDO: ${type} não sobe em ${highestBox.userData.type}`, type, "Invalid");
+                }
+            }
+
+            const controller = renderer.xr.getController(0);
+            controller.addEventListener('select', onSelect);
+            scene.add(controller);
+
+            // Retículo de Guia
+            reticle = new THREE.Mesh(
+                new THREE.RingGeometry(0.1, 0.11, 32).rotateX(-Math.PI / 2),
+                new THREE.MeshBasicMaterial()
+            );
+            reticle.matrixAutoUpdate = false;
+            reticle.visible = false;
+            scene.add(reticle);
+
+            renderer.setAnimationLoop(animate);
+        }
+
+        function checkStackRule(top, bottom) {
+            if (top === bottom) return true;
+            if (top === 'BLUE' && (bottom === 'GREEN' || bottom === 'RED')) return true;
+            if (top === 'GREEN' && bottom === 'RED') return true;
+            return false;
+        }
+
+        function updateUI(msg, type, status) {
+            const statusEl = document.getElementById('status');
+            statusEl.innerText = msg;
+            statusEl.className = status === "Valid" ? "status-valid" : "status-invalid";
+            document.getElementById('info-carga').innerText = `Tipo Atual: ${type || '-'}`;
+        }
+
+        function animate(timestamp, frame) {
+            if (frame) {
+                const referenceSpace = renderer.xr.getReferenceSpace();
+                const session = renderer.xr.getSession();
+
+                if (!hitTestSourceRequested) {
+                    session.requestReferenceSpace('viewer').then((ref) => {
+                        session.requestHitTestSource({ space: ref }).then((src) => hitTestSource = src);
+                    });
+                    hitTestSourceRequested = true;
+                }
+
+                if (hitTestSource) {
+                    const results = frame.getHitTestResults(hitTestSource);
+                    if (results.length) {
+                        const hit = results[0];
+                        reticle.visible = true;
+                        reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
+                    } else {
+                        reticle.visible = false;
+                    }
+                }
+            }
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+
+</html>
