@@ -2,7 +2,7 @@
 <html lang="pt-br">
 
 <head>
-    <title>Logística AR - Picking Inteligente</title>
+    <title>Picking via WebXR - CG</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <style>
@@ -105,23 +105,20 @@
 
             renderer.xr.getController(0).addEventListener('select', onSelect);
 
-            // --- ALTERAÇÃO NA MIRA (RETICLE) ---
             reticle = new THREE.Group();
 
-            // 1. Mira Redonda (Busca inicial)
             const circleGeom = new THREE.RingGeometry(0.04, 0.05, 32).rotateX(-Math.PI / 2);
             const circleMat = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
             const circleMesh = new THREE.Mesh(circleGeom, circleMat);
             circleMesh.name = "miraBusca";
             reticle.add(circleMesh);
 
-            // 2. Mira Quadrada (Encaixe dinâmico)
             const rectGeom = new THREE.EdgesGeometry(new THREE.PlaneGeometry(1, 1));
             const rectMat = new THREE.LineBasicMaterial({ color: 0x00ff00, linewidth: 2 });
             const rectMesh = new THREE.LineSegments(rectGeom, rectMat);
             rectMesh.rotateX(-Math.PI / 2);
             rectMesh.name = "miraEncaixe";
-            rectMesh.visible = false; // Escondida no início
+            rectMesh.visible = false;
             reticle.add(rectMesh);
 
             reticle.visible = false;
@@ -162,7 +159,6 @@
             ghostBox.geometry.dispose();
             ghostBox.geometry = new THREE.BoxGeometry(nextBoxData.w, nextBoxData.h, nextBoxData.d);
 
-            // Atualiza apenas a mira de encaixe se ela existir
             const miraEncaixe = reticle.getObjectByName("miraEncaixe");
             if (miraEncaixe) miraEncaixe.scale.set(nextBoxData.w, nextBoxData.d, 1);
 
@@ -259,8 +255,6 @@
                 if (intersects.length > 0) {
                     const hit = intersects[0];
                     reticle.visible = true;
-
-                    // Alterna para Mira Quadrada (Encaixe)
                     miraBusca.visible = false;
                     miraEncaixe.visible = true;
 
@@ -305,7 +299,6 @@
                         if (results.length) {
                             reticle.visible = true;
 
-                            // Mantém Mira Redonda (Busca)
                             miraBusca.visible = true;
                             miraEncaixe.visible = false;
 
