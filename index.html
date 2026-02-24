@@ -50,7 +50,6 @@
 </head>
 
 <body>
-
     <div id="overlay">
         <div id="status">ESCANEANDO AMBIENTE...</div>
         <div id="info-carga">Aguardando detecção de superfície</div>
@@ -69,23 +68,14 @@
         import * as THREE from 'three';
         import { ARButton } from 'three/addons/webxr/ARButton.js';
 
-        function sendLog(message) {
-            fetch('/log', {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain' },
-                body: typeof message === 'object' ? JSON.stringify(message) : message
-            }).catch(() => { });
-        }
-
         let camera, scene, renderer, reticle, ghostBox;
         let hitTestSource = null;
         let hitTestSourceRequested = false;
 
         const boxes = [];
         const raycaster = new THREE.Raycaster();
-
-        const VOL_X = 0.008;
-        const VOL_Y = 0.002;
+        const VOL_X = 0.008, VOL_Y = 0.002;
+        const PALLET_SIZE = 0.85; // Tamanho definido no seu spawnObject
 
         let nextBoxData = { w: 0.1, h: 0.1, d: 0.1, color: 0xff00ff, type: 'PENDING', hex: '#ff00ff' };
 
@@ -113,15 +103,14 @@
                 domOverlay: { root: document.body }
             }));
 
-            const controller = renderer.xr.getController(0);
-            controller.addEventListener('select', onSelect);
-            scene.add(controller);
+            renderer.xr.getController(0).addEventListener('select', onSelect);
 
-            reticle = new THREE.Mesh(
-                new THREE.RingGeometry(0.04, 0.05, 32).rotateX(-Math.PI / 2),
-                new THREE.MeshBasicMaterial({ color: 0x00ff00, depthTest: false })
-            );
-            reticle.matrixAutoUpdate = false;
+            reticle = new THREE.Group();
+            const rectGeom = new THREE.EdgesGeometry(new THREE.PlaneGeometry(1, 1));
+            const rectMat = new THREE.LineBasicMaterial({ color: 0x00ff00, linewidth: 2 });
+            const rectMesh = new THREE.LineSegments(rectGeom, rectMat);
+            rectMesh.rotateX(-Math.PI / 2);
+            reticle.add(rectMesh);
             reticle.visible = false;
             scene.add(reticle);
 
@@ -137,118 +126,109 @@
         }
 
         function rollNextBox() {
-            // 1. SORTEIA A COR PRIMEIRO (Garante equilíbrio entre as 3)
             const randomColor = Math.random();
-            let targetType = '';
-
-            // 2. DEFINE AS DIMENSÕES BASEADAS NA COR SORTEADA
             if (randomColor < 0.33) {
-                // FOCO EM VERMELHO (Volume > 0.008)
-                // Dimensões entre 0.20 e 0.25 -> Méd de 0.22^3 = 0.010
-                nextBoxData.w = Math.random() * 0.05 + 0.20;
-                nextBoxData.h = Math.random() * 0.05 + 0.20;
-                nextBoxData.d = Math.random() * 0.05 + 0.20;
-                targetType = 'VERMELHA';
-            }
-            else if (randomColor < 0.66) {
-                // FOCO EM VERDE (Volume entre 0.002 e 0.008)
-                // Dimensões entre 0.14 e 0.18 -> Méd de 0.16^3 = 0.004
-                nextBoxData.w = Math.random() * 0.04 + 0.14;
-                nextBoxData.h = Math.random() * 0.04 + 0.14;
-                nextBoxData.d = Math.random() * 0.04 + 0.14;
-                targetType = 'VERDE';
-            }
-            else {
-                // FOCO EM AZUL (Volume < 0.002)
-                // Dimensões entre 0.08 e 0.11 -> Méd de 0.10^3 = 0.001
-                nextBoxData.w = Math.random() * 0.03 + 0.08;
-                nextBoxData.h = Math.random() * 0.03 + 0.08;
-                nextBoxData.d = Math.random() * 0.03 + 0.08;
-                targetType = 'AZUL';
+                nextBoxData.w = Math.random() * 0.25 + 0.15;
+                nextBoxData.h = Math.random() * 0.20 + 0.10;
+                nextBoxData.d = Math.random() * 0.25 + 0.15;
+            } else if (randomColor < 0.66) {
+                nextBoxData.w = Math.random() * 0.15 + 0.10;
+                nextBoxData.h = Math.random() * 0.12 + 0.08;
+                nextBoxData.d = Math.random() * 0.15 + 0.10;
+            } else {
+                nextBoxData.w = Math.random() * 0.08 + 0.05;
+                nextBoxData.h = Math.random() * 0.06 + 0.04;
+                nextBoxData.d = Math.random() * 0.08 + 0.05;
             }
 
             const vol = nextBoxData.w * nextBoxData.h * nextBoxData.d;
+            if (vol > VOL_X) { nextBoxData.type = 'VERMELHA'; nextBoxData.hex = '#BF4646'; nextBoxData.color = 0xBF4646; }
+            else if (vol < VOL_Y) { nextBoxData.type = 'AZUL'; nextBoxData.hex = '#261CC1'; nextBoxData.color = 0x261CC1; }
+            else { nextBoxData.type = 'VERDE'; nextBoxData.hex = '#237227'; nextBoxData.color = 0x237227; }
 
-            // 3. ATRIBUIÇÃO FINAL DE CORES PARA O SISTEMA
-            if (vol > VOL_X) {
-                nextBoxData.color = 0xff0000; nextBoxData.type = 'VERMELHA'; nextBoxData.hex = '#ff4444';
-            } else if (vol < VOL_Y) {
-                nextBoxData.color = 0x0000ff; nextBoxData.type = 'AZUL'; nextBoxData.hex = '#4444ff';
-            } else {
-                nextBoxData.color = 0x00ff00; nextBoxData.type = 'VERDE'; nextBoxData.hex = '#44ff44';
-            }
-
-            // Atualiza a geometria do Ghost Box
             ghostBox.geometry.dispose();
             ghostBox.geometry = new THREE.BoxGeometry(nextBoxData.w, nextBoxData.h, nextBoxData.d);
-
-            updateOverlayInfo(`Próxima Carga: <span class="color-label" style="background:${nextBoxData.hex}">${nextBoxData.type}</span>`);
-            sendLog(`EQUILÍBRIO: Sorteada ${nextBoxData.type} | Vol: ${vol.toFixed(6)}`);
+            reticle.children[0].scale.set(nextBoxData.w, nextBoxData.d, 1);
+            document.getElementById('info-carga').innerHTML = `Próxima Carga: <span class="color-label" style="background:${nextBoxData.hex}">${nextBoxData.type}</span>`;
         }
 
-        function updateOverlayInfo(html) {
-            document.getElementById('info-carga').innerHTML = html;
+        function isPositionFree(pos, w, h, d) {
+            const boxMargin = 0.005;
+            const newBoxBB = new THREE.Box3().setFromCenterAndSize(
+                new THREE.Vector3(pos.x, pos.y + h / 2, pos.z),
+                new THREE.Vector3(w - boxMargin, h - boxMargin, d - boxMargin)
+            );
+            for (let box of boxes) {
+                const otherBoxBB = new THREE.Box3().setFromObject(box);
+                if (newBoxBB.intersectsBox(otherBoxBB)) {
+                    const yDiff = Math.abs((pos.y + h / 2) - box.position.y);
+                    if (yDiff < (h / 2 + box.userData.h / 2) - 0.01) return false;
+                }
+            }
+            return true;
+        }
+
+        // --- NOVA FUNÇÃO DE VERIFICAÇÃO DE BORDAS DO PALETE ---
+        function isWithinPalletBounds(pos, w, d) {
+            if (boxes.length === 0) return true; // Se não tem palete, está livre para colocar o primeiro
+            const pallet = boxes[0]; // O primeiro objeto é sempre o palete
+
+            const pX = pallet.position.x;
+            const pZ = pallet.position.z;
+            const limit = PALLET_SIZE / 2;
+
+            // Verifica se as extremidades da caixa (centro +- metade do tamanho) saem do palete
+            const boxMinX = pos.x - (w / 2);
+            const boxMaxX = pos.x + (w / 2);
+            const boxMinZ = pos.z - (d / 2);
+            const boxMaxZ = pos.z + (d / 2);
+
+            const withinX = boxMinX >= (pX - limit) && boxMaxX <= (pX + limit);
+            const withinZ = boxMinZ >= (pZ - limit) && boxMaxZ <= (pZ + limit);
+
+            return withinX && withinZ;
         }
 
         function onSelect() {
             if (!reticle.visible) return;
 
-            const position = new THREE.Vector3();
-            reticle.matrix.decompose(position, new THREE.Quaternion(), new THREE.Vector3());
+            // Validações antes de criar
+            const areaLivre = boxes.length === 0 || isPositionFree(reticle.position, nextBoxData.w, nextBoxData.h, nextBoxData.d);
+            const dentroDoPalete = isWithinPalletBounds(reticle.position, nextBoxData.w, nextBoxData.d);
+
+            if (!areaLivre || !dentroDoPalete) return;
 
             if (boxes.length === 0) {
-                spawnObject(null, true, position);
+                spawnObject(null, true, reticle.position);
             } else {
                 raycaster.setFromCamera({ x: 0, y: 0 }, camera);
                 const intersects = raycaster.intersectObjects(boxes);
-
-                if (intersects.length > 0) {
-                    const intersect = intersects[0];
-                    if (intersect.face.normal.y > 0.5) {
-                        spawnObject(intersect.object, false, intersect.point);
-                    }
+                if (intersects.length > 0 && intersects[0].face.normal.y > 0.5) {
+                    spawnObject(intersects[0].object, false, reticle.position);
                 }
             }
         }
 
-        function spawnObject(target, isPallet, hitPoint) {
-            let w, h, d, color, type, volume;
+        function spawnObject(target, isPallet, pos) {
+            let w = isPallet ? PALLET_SIZE : nextBoxData.w;
+            let h = isPallet ? 0.08 : nextBoxData.h;
+            let d = isPallet ? PALLET_SIZE : nextBoxData.d;
+            let color = isPallet ? 0xC0B87A : nextBoxData.color;
 
-            if (isPallet) {
-                w = 0.5; h = 0.04; d = 0.5;
-                color = 0x8B4513; type = 'PALETE';
-            } else {
-                w = nextBoxData.w; h = nextBoxData.h; d = nextBoxData.d;
-                color = nextBoxData.color; type = nextBoxData.type;
-                volume = w * h * d;
-                sendLog(`Info: ${type} Volume ${volume.toFixed(4)} m³`);
-
-
-                if (target.userData.type !== 'PALETE' && !checkStackRule(nextBoxData.rawType(), target.userData.rawType)) {
-                    sendLog(`ERRO: ${type} bloqueado sobre ${target.userData.type}`);
-                    return;
-                }
-            }
+            if (!isPallet && target.userData.type !== 'PALETE' && !checkStackRule(nextBoxData.rawType(), target.userData.rawType)) return;
 
             const mesh = new THREE.Mesh(
                 new THREE.BoxGeometry(w, h, d),
                 new THREE.MeshPhongMaterial({ color: color, transparent: true, opacity: 0.9 })
             );
-
-            mesh.position.set(hitPoint.x, hitPoint.y + (h / 2), hitPoint.z);
-            mesh.userData = { type: type, rawType: isPallet ? 'PALLET' : nextBoxData.rawType(), h: h };
-
+            mesh.position.set(pos.x, pos.y + (h / 2), pos.z);
+            mesh.userData = { type: isPallet ? 'PALETE' : nextBoxData.type, rawType: isPallet ? 'PALLET' : nextBoxData.rawType(), h: h };
             scene.add(mesh);
             boxes.push(mesh);
-
-            sendLog({ event: "SPAWN", type: type, pos: mesh.position });
-
             if (!isPallet) rollNextBox();
             document.getElementById('status').innerText = isPallet ? "PALETE POSICIONADO" : "CARGA EMPILHADA";
-            document.getElementById('overlay').style.borderColor = '#ff00ff';
         }
 
-        // Função auxiliar para mapear nomes PT para as regras EN
         nextBoxData.rawType = function () {
             if (this.type === 'VERMELHA') return 'RED';
             if (this.type === 'VERDE') return 'GREEN';
@@ -257,9 +237,7 @@
         };
 
         function checkStackRule(top, bottom) {
-            if (top === bottom) return true;
-            if (top === 'BLUE' && (bottom === 'GREEN' || bottom === 'RED')) return true;
-            if (top === 'GREEN' && bottom === 'RED') return true;
+            if (top === bottom || (top === 'BLUE' && (bottom === 'GREEN' || bottom === 'RED')) || (top === 'GREEN' && bottom === 'RED')) return true;
             return false;
         }
 
@@ -267,30 +245,43 @@
             if (frame) {
                 const referenceSpace = renderer.xr.getReferenceSpace();
                 const session = renderer.xr.getSession();
-
                 raycaster.setFromCamera({ x: 0, y: 0 }, camera);
                 const intersects = raycaster.intersectObjects(boxes);
 
                 if (intersects.length > 0) {
                     const hit = intersects[0];
                     reticle.visible = true;
-                    reticle.matrix.makeTranslation(hit.point.x, hit.point.y + 0.001, hit.point.z);
-                    reticle.material.color.setHex(0xff00ff);
+
+                    if (hit.object.userData.type !== 'PALETE') {
+                        reticle.position.set(hit.object.position.x, hit.point.y + 0.002, hit.object.position.z);
+                    } else {
+                        const snap = 0.01;
+                        reticle.position.set(Math.round(hit.point.x / snap) * snap, hit.point.y + 0.002, Math.round(hit.point.z / snap) * snap);
+                    }
 
                     ghostBox.visible = true;
-                    ghostBox.position.set(hit.point.x, hit.point.y + (nextBoxData.h / 2), hit.point.z);
+                    ghostBox.position.set(reticle.position.x, reticle.position.y + (nextBoxData.h / 2), reticle.position.z);
 
-                    if (hit.object.userData.rawType !== 'PALLET' && !checkStackRule(nextBoxData.rawType(), hit.object.userData.rawType)) {
+                    // LOGICA DE VALIDAÇÃO VISUAL
+                    const areaLivre = isPositionFree(reticle.position, nextBoxData.w, nextBoxData.h, nextBoxData.d);
+                    const regraValida = (hit.object.userData.rawType === 'PALLET' || checkStackRule(nextBoxData.rawType(), hit.object.userData.rawType));
+                    const dentroDoPalete = isWithinPalletBounds(reticle.position, nextBoxData.w, nextBoxData.d);
+
+                    if (!dentroDoPalete) {
+                        ghostBox.material.color.setHex(0xffaa00);
+                        document.getElementById('status').innerText = "FORA DO PALETE";
+                        document.getElementById('overlay').style.borderColor = '#ffaa00';
+                    } else if (!areaLivre) {
+                        ghostBox.material.color.setHex(0xff0000);
+                        document.getElementById('status').innerText = "ESPAÇO OCUPADO";
+                        document.getElementById('overlay').style.borderColor = '#ff0000';
+                    } else if (!regraValida) {
                         ghostBox.material.color.setHex(0xff0000);
                         document.getElementById('status').innerText = "EMPILHAMENTO INVÁLIDO";
-                        document.getElementById('status').style.color = "#ff4444";
-                        updateOverlayInfo(`Motivo: <span style="color:#ff4444">${nextBoxData.type} não suportada por ${hit.object.userData.type}</span>`);
                         document.getElementById('overlay').style.borderColor = '#ff0000';
                     } else {
                         ghostBox.material.color.setHex(0xff00ff);
                         document.getElementById('status').innerText = "POSIÇÃO VÁLIDA";
-                        document.getElementById('status').style.color = "#ffffff";
-                        updateOverlayInfo(`Próxima: <span class="color-label" style="background:${nextBoxData.hex}">${nextBoxData.type}</span>`);
                         document.getElementById('overlay').style.borderColor = '#ff00ff';
                     }
 
@@ -306,14 +297,13 @@
                         const results = frame.getHitTestResults(hitTestSource);
                         if (results.length) {
                             reticle.visible = true;
-                            reticle.matrix.fromArray(results[0].getPose(referenceSpace).transform.matrix);
-                            reticle.material.color.setHex(0x00ff00);
+                            const hitPose = results[0].getPose(referenceSpace);
+                            reticle.position.set(hitPose.transform.position.x, hitPose.transform.position.y, hitPose.transform.position.z);
                             document.getElementById('status').innerText = "LOCALIZE O CHÃO";
                         } else { reticle.visible = false; }
                     }
                 } else {
-                    reticle.visible = false;
-                    ghostBox.visible = false;
+                    reticle.visible = false; ghostBox.visible = false;
                     document.getElementById('status').innerText = "MIRE NO PALETE";
                 }
             }
