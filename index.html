@@ -75,7 +75,7 @@
         const boxes = [];
         const raycaster = new THREE.Raycaster();
         const VOL_X = 0.008, VOL_Y = 0.002;
-        const PALLET_SIZE = 0.85; // Tamanho definido no seu spawnObject
+        const PALLET_SIZE = 1;
 
         let nextBoxData = { w: 0.1, h: 0.1, d: 0.1, color: 0xff00ff, type: 'PENDING', hex: '#ff00ff' };
 
@@ -105,12 +105,25 @@
 
             renderer.xr.getController(0).addEventListener('select', onSelect);
 
+            // --- ALTERAÇÃO NA MIRA (RETICLE) ---
             reticle = new THREE.Group();
+
+            // 1. Mira Redonda (Busca inicial)
+            const circleGeom = new THREE.RingGeometry(0.04, 0.05, 32).rotateX(-Math.PI / 2);
+            const circleMat = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+            const circleMesh = new THREE.Mesh(circleGeom, circleMat);
+            circleMesh.name = "miraBusca";
+            reticle.add(circleMesh);
+
+            // 2. Mira Quadrada (Encaixe dinâmico)
             const rectGeom = new THREE.EdgesGeometry(new THREE.PlaneGeometry(1, 1));
             const rectMat = new THREE.LineBasicMaterial({ color: 0x00ff00, linewidth: 2 });
             const rectMesh = new THREE.LineSegments(rectGeom, rectMat);
             rectMesh.rotateX(-Math.PI / 2);
+            rectMesh.name = "miraEncaixe";
+            rectMesh.visible = false; // Escondida no início
             reticle.add(rectMesh);
+
             reticle.visible = false;
             scene.add(reticle);
 
@@ -128,17 +141,17 @@
         function rollNextBox() {
             const randomColor = Math.random();
             if (randomColor < 0.33) {
-                nextBoxData.w = Math.random() * 0.25 + 0.15;
-                nextBoxData.h = Math.random() * 0.20 + 0.10;
-                nextBoxData.d = Math.random() * 0.25 + 0.15;
+                nextBoxData.w = Math.random() * 0.22 + 0.15;
+                nextBoxData.h = Math.random() * 0.18 + 0.12;
+                nextBoxData.d = Math.random() * 0.22 + 0.15;
             } else if (randomColor < 0.66) {
-                nextBoxData.w = Math.random() * 0.15 + 0.10;
+                nextBoxData.w = Math.random() * 0.14 + 0.10;
                 nextBoxData.h = Math.random() * 0.12 + 0.08;
-                nextBoxData.d = Math.random() * 0.15 + 0.10;
+                nextBoxData.d = Math.random() * 0.14 + 0.10;
             } else {
-                nextBoxData.w = Math.random() * 0.08 + 0.05;
+                nextBoxData.w = Math.random() * 0.08 + 0.04;
                 nextBoxData.h = Math.random() * 0.06 + 0.04;
-                nextBoxData.d = Math.random() * 0.08 + 0.05;
+                nextBoxData.d = Math.random() * 0.08 + 0.04;
             }
 
             const vol = nextBoxData.w * nextBoxData.h * nextBoxData.d;
@@ -148,7 +161,11 @@
 
             ghostBox.geometry.dispose();
             ghostBox.geometry = new THREE.BoxGeometry(nextBoxData.w, nextBoxData.h, nextBoxData.d);
-            reticle.children[0].scale.set(nextBoxData.w, nextBoxData.d, 1);
+
+            // Atualiza apenas a mira de encaixe se ela existir
+            const miraEncaixe = reticle.getObjectByName("miraEncaixe");
+            if (miraEncaixe) miraEncaixe.scale.set(nextBoxData.w, nextBoxData.d, 1);
+
             document.getElementById('info-carga').innerHTML = `Próxima Carga: <span class="color-label" style="background:${nextBoxData.hex}">${nextBoxData.type}</span>`;
         }
 
@@ -168,34 +185,23 @@
             return true;
         }
 
-        // --- NOVA FUNÇÃO DE VERIFICAÇÃO DE BORDAS DO PALETE ---
         function isWithinPalletBounds(pos, w, d) {
-            if (boxes.length === 0) return true; // Se não tem palete, está livre para colocar o primeiro
-            const pallet = boxes[0]; // O primeiro objeto é sempre o palete
-
+            if (boxes.length === 0) return true;
+            const pallet = boxes[0];
             const pX = pallet.position.x;
             const pZ = pallet.position.z;
             const limit = PALLET_SIZE / 2;
-
-            // Verifica se as extremidades da caixa (centro +- metade do tamanho) saem do palete
             const boxMinX = pos.x - (w / 2);
             const boxMaxX = pos.x + (w / 2);
             const boxMinZ = pos.z - (d / 2);
             const boxMaxZ = pos.z + (d / 2);
-
-            const withinX = boxMinX >= (pX - limit) && boxMaxX <= (pX + limit);
-            const withinZ = boxMinZ >= (pZ - limit) && boxMaxZ <= (pZ + limit);
-
-            return withinX && withinZ;
+            return boxMinX >= (pX - limit) && boxMaxX <= (pX + limit) && boxMinZ >= (pZ - limit) && boxMaxZ <= (pZ + limit);
         }
 
         function onSelect() {
             if (!reticle.visible) return;
-
-            // Validações antes de criar
             const areaLivre = boxes.length === 0 || isPositionFree(reticle.position, nextBoxData.w, nextBoxData.h, nextBoxData.d);
             const dentroDoPalete = isWithinPalletBounds(reticle.position, nextBoxData.w, nextBoxData.d);
-
             if (!areaLivre || !dentroDoPalete) return;
 
             if (boxes.length === 0) {
@@ -237,8 +243,7 @@
         };
 
         function checkStackRule(top, bottom) {
-            if (top === bottom || (top === 'BLUE' && (bottom === 'GREEN' || bottom === 'RED')) || (top === 'GREEN' && bottom === 'RED')) return true;
-            return false;
+            return (top === bottom || (top === 'BLUE' && (bottom === 'GREEN' || bottom === 'RED')) || (top === 'GREEN' && bottom === 'RED'));
         }
 
         function animate(timestamp, frame) {
@@ -248,36 +253,38 @@
                 raycaster.setFromCamera({ x: 0, y: 0 }, camera);
                 const intersects = raycaster.intersectObjects(boxes);
 
+                const miraBusca = reticle.getObjectByName("miraBusca");
+                const miraEncaixe = reticle.getObjectByName("miraEncaixe");
+
                 if (intersects.length > 0) {
                     const hit = intersects[0];
                     reticle.visible = true;
 
-                    if (hit.object.userData.type !== 'PALETE') {
-                        reticle.position.set(hit.object.position.x, hit.point.y + 0.002, hit.object.position.z);
-                    } else {
-                        const snap = 0.01;
-                        reticle.position.set(Math.round(hit.point.x / snap) * snap, hit.point.y + 0.002, Math.round(hit.point.z / snap) * snap);
-                    }
+                    // Alterna para Mira Quadrada (Encaixe)
+                    miraBusca.visible = false;
+                    miraEncaixe.visible = true;
+
+                    const snap = 0.005;
+                    reticle.position.set(
+                        Math.round(hit.point.x / snap) * snap,
+                        hit.point.y + 0.002,
+                        Math.round(hit.point.z / snap) * snap
+                    );
 
                     ghostBox.visible = true;
                     ghostBox.position.set(reticle.position.x, reticle.position.y + (nextBoxData.h / 2), reticle.position.z);
 
-                    // LOGICA DE VALIDAÇÃO VISUAL
                     const areaLivre = isPositionFree(reticle.position, nextBoxData.w, nextBoxData.h, nextBoxData.d);
                     const regraValida = (hit.object.userData.rawType === 'PALLET' || checkStackRule(nextBoxData.rawType(), hit.object.userData.rawType));
                     const dentroDoPalete = isWithinPalletBounds(reticle.position, nextBoxData.w, nextBoxData.d);
 
                     if (!dentroDoPalete) {
                         ghostBox.material.color.setHex(0xffaa00);
-                        document.getElementById('status').innerText = "FORA DO PALETE";
+                        document.getElementById('status').innerText = "FORA DO LIMITE DO PALETE";
                         document.getElementById('overlay').style.borderColor = '#ffaa00';
-                    } else if (!areaLivre) {
+                    } else if (!areaLivre || !regraValida) {
                         ghostBox.material.color.setHex(0xff0000);
-                        document.getElementById('status').innerText = "ESPAÇO OCUPADO";
-                        document.getElementById('overlay').style.borderColor = '#ff0000';
-                    } else if (!regraValida) {
-                        ghostBox.material.color.setHex(0xff0000);
-                        document.getElementById('status').innerText = "EMPILHAMENTO INVÁLIDO";
+                        document.getElementById('status').innerText = !areaLivre ? "ESPAÇO OCUPADO" : "EMPILHAMENTO INVÁLIDO";
                         document.getElementById('overlay').style.borderColor = '#ff0000';
                     } else {
                         ghostBox.material.color.setHex(0xff00ff);
@@ -297,6 +304,11 @@
                         const results = frame.getHitTestResults(hitTestSource);
                         if (results.length) {
                             reticle.visible = true;
+
+                            // Mantém Mira Redonda (Busca)
+                            miraBusca.visible = true;
+                            miraEncaixe.visible = false;
+
                             const hitPose = results[0].getPose(referenceSpace);
                             reticle.position.set(hitPose.transform.position.x, hitPose.transform.position.y, hitPose.transform.position.z);
                             document.getElementById('status').innerText = "LOCALIZE O CHÃO";
