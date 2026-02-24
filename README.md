@@ -20,3 +20,32 @@ O arquivo `server.py` atua como servidor de arquivos e receptor de logs. No term
 
 ```bash
 python server.py 8000
+```
+
+O servidor ficará ouvindo a porta 8000 e imprimirá no console todos os logs enviados pelo celular.
+
+### 2. Configurar o Túnel HTTPS (ngrok)
+Abra um segundo terminal e utilize o ngrok para gerar uma URL segura que aponte para o seu servidor local:
+
+```bash
+ngrok http 8000
+```
+O ngrok fornecerá um endereço semelhante a https://abcd-123.ngrok.io.
+
+### 3. Acesso e Operação no Dispositivo
+Acesse a URL gerada pelo ngrok no navegador do celular (recomenda-se o Chrome no Android).
+
+Clique no botão "START AR" na parte inferior da tela.
+
+Fase 1 (Círculo Verde): Mova o celular para escanear o ambiente. Quando um círculo verde aparecer no chão, clique na tela para posicionar o Palete.
+
+Fase 2 (Quadrado Rosa/Vermelho): Após o palete, a mira se tornará um quadrado que reflete o tamanho da carga sorteada.
+
+Rosa: Posição válida para empilhar.
+
+Vermelho: Posição inválida (espaço ocupado ou violação da regra de cores).
+
+###  📂 Estrutura do Projeto
+index.html: Contém toda a aplicação, incluindo o motor de renderização 3D, a lógica de hit-test, as regras de empilhamento e a interface de usuário.
+
+server.py: Script responsável por servir o projeto e permitir que os logs de depuração do navegador do celular sejam visualizados em tempo real no terminal do computador através da rota /log.
